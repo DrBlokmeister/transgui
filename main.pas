@@ -43,7 +43,7 @@ uses
   Graphics, Dialogs, ComCtrls, Menus, ActnList, LCLVersion,
   httpsend, StdCtrls, fpjson, jsonparser, ExtCtrls, rpc, syncobjs, variants, varlist, IpResolver,
   zipper, ResTranslator, VarGrid, StrUtils, LCLProc, Grids, BaseForm, utils, AddTorrent, Types,
-  LazFileUtils, LazUTF8, StringToVK, passwcon, GContnrs,lineinfo, RegExpr, Performance;
+  LazFileUtils, LazUTF8, StringToVK, passwcon, GContnrs,lineinfo, RegExpr, Performance, TorrentUpdate;
 
 const
   AppName = 'Transmission Remote GUI';
@@ -717,6 +717,7 @@ type
     FFilesTree: TFilesTree;
     FFilesCapt: string;
     FCalcAvg: boolean;
+    FLastDynamicTorrents: TTorrentSnapshots;
     FPasswords: TStringList;
     FAppProps:TApplicationProperties;
 
@@ -5750,6 +5751,25 @@ var
       VarClear(History);
   end;
 
+  function BuildDynamicSnapshots: TTorrentSnapshots;
+  var
+    SnapshotIndex: Integer;
+    SnapshotTorrent: TJSONObject;
+  begin
+    SetLength(Result, list.Count);
+    for SnapshotIndex:=0 to list.Count - 1 do begin
+      SnapshotTorrent:=list[SnapshotIndex] as TJSONObject;
+      Result[SnapshotIndex].Id:=SnapshotTorrent.Integers['id'];
+      Result[SnapshotIndex].Name:=SnapshotTorrent.Strings['name'];
+      Result[SnapshotIndex].Status:=SnapshotTorrent.Integers['status'];
+      Result[SnapshotIndex].RateDownload:=Round(SnapshotTorrent.Floats['rateDownload']);
+      Result[SnapshotIndex].RateUpload:=Round(SnapshotTorrent.Floats['rateUpload']);
+      Result[SnapshotIndex].LeftUntilDone:=Round(SnapshotTorrent.Floats['leftUntilDone']);
+      Result[SnapshotIndex].SizeWhenDone:=Round(SnapshotTorrent.Floats['sizeWhenDone']);
+      Result[SnapshotIndex].ErrorString:=SnapshotTorrent.Strings['errorString'];
+    end;
+  end;
+
 var
   FilterIdx, OldId: integer;
   TrackerFilter, PathFilter, LabelFilter: string;
@@ -5761,13 +5781,27 @@ var
   FieldExists: array of boolean;
   GridStarted, SortStarted, GroupingStarted: QWord;
   RowsAdded, RowsRemoved: integer;
+  IncomingSnapshots: TTorrentSnapshots;
+  SnapshotUpdate: TTorrentUpdateResult;
 begin
   RowsAdded:=0;
   RowsRemoved:=0;
   if gTorrents.Tag <> 0 then exit;
   if list = nil then begin
+    SetLength(FLastDynamicTorrents, 0);
     ClearDetailsInfo;
     exit;
+  end;
+  IncomingSnapshots:=BuildDynamicSnapshots;
+  if (Length(FLastDynamicTorrents) > 0) and not RpcObj.RequestFullInfo then begin
+    SnapshotUpdate:=CompareSnapshots(FLastDynamicTorrents, IncomingSnapshots, tsNone, False);
+    if (Length(SnapshotUpdate.AddedIds) = 0) and
+      (Length(SnapshotUpdate.RemovedIds) = 0) and
+      (Length(SnapshotUpdate.ChangedIds) = 0) and not FFilterChanged then begin
+      FLastDynamicTorrents:=IncomingSnapshots;
+      TimingLog(Format('FillTorrentsList skipped: %d unchanged torrents', [list.Count]));
+      exit;
+    end;
   end;
 {
   for i:=1 to 1000 do begin
@@ -6318,6 +6352,7 @@ begin
   finally
     Paths.Free;
   end;
+  FLastDynamicTorrents:=IncomingSnapshots;
   DetailsUpdated;
 end;
 
