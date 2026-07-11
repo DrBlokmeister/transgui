@@ -104,6 +104,7 @@ type
     XTorrentSession: string;
     FMainThreadId: TThreadID;
     FRpcPath: string;
+    FPeriodicRefreshSuspendCount: Integer;
 
     function GetConnected: boolean;
     function GetConnecting: boolean;
@@ -136,6 +137,9 @@ type
 
     procedure Connect;
     procedure Disconnect;
+    procedure SuspendPeriodicRefresh;
+    procedure ResumePeriodicRefresh;
+    function PeriodicRefreshSuspended: Boolean;
 
     function SendRequest(req: TJSONObject; ReturnArguments: boolean = True; ATimeOut: integer = -1): TJSONObject;
     function RequestInfo(TorrentId: integer; const Fields: array of const; const ExtraFields: array of string): TJSONObject;
@@ -195,7 +199,7 @@ begin
     t:=Now - 1;
     tt:=Now;
     while not Terminated do begin
-      if Now - t >= RefreshInterval then begin
+      if not FRpc.PeriodicRefreshSuspended and (Now - t >= RefreshInterval) then begin
         FRpc.RefreshNow:=FRpc.RefreshNow + [rtTorrents, rtDetails];
         t:=Now;
       end;
@@ -205,13 +209,13 @@ begin
       end;
 
       if Status = '' then
-        if rtTorrents in FRpc.RefreshNow then begin
+        if (rtTorrents in FRpc.RefreshNow) and not FRpc.PeriodicRefreshSuspended then begin
           GetTorrents;
           Exclude(FRpc.RefreshNow, rtTorrents);
           t:=Now;
         end
         else
-          if rtDetails in FRpc.RefreshNow then begin
+          if (rtDetails in FRpc.RefreshNow) and not FRpc.PeriodicRefreshSuspended then begin
             i:=CurTorrentId;
             ai:=AdvInfo;
             if i <> 0 then begin
@@ -247,6 +251,8 @@ begin
       end;
 
       if FRpc.RefreshNow = [] then
+        Sleep(50);
+      if FRpc.PeriodicRefreshSuspended then
         Sleep(50);
     end;
   except
@@ -1063,6 +1069,39 @@ end;
 procedure TRpc.Unlock;
 begin
   FLock.Leave;
+end;
+
+procedure TRpc.SuspendPeriodicRefresh;
+begin
+  Lock;
+  try
+    Inc(FPeriodicRefreshSuspendCount);
+  finally
+    Unlock;
+  end;
+end;
+
+procedure TRpc.ResumePeriodicRefresh;
+begin
+  Lock;
+  try
+    if FPeriodicRefreshSuspendCount > 0 then
+      Dec(FPeriodicRefreshSuspendCount);
+    if FPeriodicRefreshSuspendCount = 0 then
+      Include(RefreshNow, rtTorrents);
+  finally
+    Unlock;
+  end;
+end;
+
+function TRpc.PeriodicRefreshSuspended: Boolean;
+begin
+  Lock;
+  try
+    Result:=FPeriodicRefreshSuspendCount > 0;
+  finally
+    Unlock;
+  end;
 end;
 
 procedure TRpc.Connect;

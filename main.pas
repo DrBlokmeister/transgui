@@ -2749,7 +2749,12 @@ begin
         else begin
           HideWaitMsg;
           TimingLog(Format('Add torrent dialog opening: %d ms', [TimingElapsed(DialogStarted)]));
-          ok:=ShowModal = mrOk;
+          RpcObj.SuspendPeriodicRefresh;
+          try
+            ok:=ShowModal = mrOk;
+          finally
+            RpcObj.ResumePeriodicRefresh;
+          end;
           if BorderStyle = bsSizeable then begin
             Ini.WriteInteger('AddTorrent', 'Width', Width);
             Ini.WriteInteger('AddTorrent', 'Height', Height);
