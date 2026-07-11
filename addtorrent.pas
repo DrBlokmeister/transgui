@@ -92,12 +92,15 @@ type
   private
     FDiskSpaceCaption: string;
     FTree: TFilesTree;
+    FFreeSpaceRequest: TThread;
+    FFreeSpaceGeneration: Integer;
     procedure TreeStateChanged(Sender: TObject);
     procedure UpdateSize;
   public
     OrigCaption: string;
     Extension : string;
     property FilesTree: TFilesTree read FTree;
+    destructor Destroy; override;
   end;
 
   TFolderInfo = record
@@ -183,6 +186,70 @@ const
 implementation
 
 uses lclintf, lcltype, main, variants, Utils, rpc, lclproc;
+
+type
+  TFreeSpaceRequest = class(TThread)
+  private
+    FForm: TAddTorrentForm;
+    FPath: string;
+    FGeneration: Integer;
+    FFreeSpace: Double;
+    procedure ApplyResult;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(AForm: TAddTorrentForm; const APath: string;
+      AGeneration: Integer);
+  end;
+
+var
+  ActiveAddTorrentForms: TList;
+
+constructor TFreeSpaceRequest.Create(AForm: TAddTorrentForm; const APath: string;
+  AGeneration: Integer);
+begin
+  inherited Create(True);
+  FreeOnTerminate:=False;
+  FForm:=AForm;
+  FPath:=APath;
+  FGeneration:=AGeneration;
+  Start;
+end;
+
+procedure TFreeSpaceRequest.Execute;
+var
+  Request, RequestArguments, Response: TJSONObject;
+begin
+  FFreeSpace:=-1;
+  Request:=TJSONObject.Create;
+  Response:=nil;
+  try
+    Request.Add('method', 'free-space');
+    RequestArguments:=TJSONObject.Create;
+    RequestArguments.Add('path', UTF8Decode(FPath));
+    Request.Add('arguments', RequestArguments);
+    Response:=RpcObj.SendRequest(Request);
+    if Response <> nil then
+      FFreeSpace:=Response.Floats['size-bytes'];
+    RpcObj.Status:='';
+  except
+    FFreeSpace:=-1;
+  end;
+  Response.Free;
+  Request.Free;
+  TThread.Queue(nil, @ApplyResult);
+end;
+
+procedure TFreeSpaceRequest.ApplyResult;
+begin
+  if ActiveAddTorrentForms.IndexOf(FForm) >= 0 then
+    if (FForm.FFreeSpaceRequest = Self) and
+      (FForm.FFreeSpaceGeneration = FGeneration) then begin
+      FForm.txDiskSpace.Caption:=FForm.FDiskSpaceCaption + ' ' + GetHumanSize(FFreeSpace);
+      FForm.FFreeSpaceRequest:=nil;
+    end;
+  Free;
+end;
 
 const
   roChecked   = $030000;
@@ -1067,37 +1134,19 @@ end;
 
 procedure TAddTorrentForm.DiskSpaceTimerTimer(Sender: TObject);
 var
-  f: double;
-  req, args: TJSONObject;
   Started: QWord;
 begin
   Started:=TimingStart;
   DiskSpaceTimer.Enabled:=False;
   if RpcObj.RPCVersion < 15 then
     exit;
-  AppBusy;
-  f:=-1;
-  try
-    req:=TJSONObject.Create;
-    args:=TJSONObject.Create;
-    try
-      req.Add('method', 'free-space');
-      args.Add('path', UTF8Decode(cbDestFolder.Text));
-      req.Add('arguments', args);
-      args:=RpcObj.SendRequest(req);
-      if args <> nil then
-        f:=args.Floats['size-bytes'];
-      RpcObj.Status:='';
-    finally
-      args.Free;
-      req.Free;
-    end;
-  except
-    f:=-1;
-  end;
-  txDiskSpace.Caption:=FDiskSpaceCaption + ' ' + GetHumanSize(f);
-  TimingLog(Format('Add dialog free-space request: %d ms', [TimingElapsed(Started)]));
-  AppNormal;
+  if FFreeSpaceRequest <> nil then
+    exit;
+  Inc(FFreeSpaceGeneration);
+  txDiskSpace.Caption:=FDiskSpaceCaption + ' Checking...';
+  FFreeSpaceRequest:=TFreeSpaceRequest.Create(Self, cbDestFolder.Text,
+    FFreeSpaceGeneration);
+  TimingLog(Format('Add dialog free-space request queued: %d ms', [TimingElapsed(Started)]));
 end;
 
 procedure TAddTorrentForm.edSaveAsChange(Sender: TObject);
@@ -1258,6 +1307,7 @@ end;
 
 procedure TAddTorrentForm.FormCreate(Sender: TObject);
 begin
+  ActiveAddTorrentForms.Add(Self);
   OrigCaption:=Caption;
   FDiskSpaceCaption:=txDiskSpace.Caption;
   lvFiles.Items.ExtraColumns:=FilesExtraColumns;
@@ -1284,8 +1334,18 @@ begin
 {$endif darwin}
 end;
 
+destructor TAddTorrentForm.Destroy;
+begin
+  ActiveAddTorrentForms.Remove(Self);
+  inherited Destroy;
+end;
+
 initialization
+  ActiveAddTorrentForms:=TList.Create;
   {$I addtorrent.lrs}
+
+finalization
+  ActiveAddTorrentForms.Free;
 
 end.
 
