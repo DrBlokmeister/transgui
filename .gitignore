@@ -52,3 +52,9 @@ Release/
 
 # transgui binary
 /transgui
+
+# Local RPC benchmark credentials
+.env.local
+
+# Python benchmark bytecode
+__pycache__/

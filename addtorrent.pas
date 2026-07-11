@@ -39,7 +39,7 @@ interface
 uses
   Classes, SysUtils, FileUtil, LResources, Forms, Controls, Graphics, Dialogs,
   StdCtrls, Spin, VarGrid, Grids, ButtonPanel, ExtCtrls, Buttons, BaseForm,
-  varlist, fpjson, StrUtils, DateUtils, LazUTF8;
+  varlist, fpjson, StrUtils, DateUtils, LazUTF8, Performance;
 
 resourcestring
   SSize = 'Size';
@@ -1069,7 +1069,9 @@ procedure TAddTorrentForm.DiskSpaceTimerTimer(Sender: TObject);
 var
   f: double;
   req, args: TJSONObject;
+  Started: QWord;
 begin
+  Started:=TimingStart;
   DiskSpaceTimer.Enabled:=False;
   if RpcObj.RPCVersion < 15 then
     exit;
@@ -1094,6 +1096,7 @@ begin
     f:=-1;
   end;
   txDiskSpace.Caption:=FDiskSpaceCaption + ' ' + GetHumanSize(f);
+  TimingLog(Format('Add dialog free-space request: %d ms', [TimingElapsed(Started)]));
   AppNormal;
 end;
 

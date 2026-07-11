@@ -155,7 +155,7 @@ var
 
 implementation
 
-uses Main, ssl_openssl_lib, synafpc, blcksock;
+uses Main, ssl_openssl_lib, synafpc, blcksock, Performance;
 
 function TranslateTableToObjects(reply: TJSONObject) : TJSONObject;
 var
@@ -276,8 +276,12 @@ begin
 end;
 
 procedure TRpcThread.DoFillTorrentsList;
+var
+  Started: QWord;
 begin
+  Started:=TimingStart;
   MainForm.FillTorrentsList(ResultData as TJSONArray);
+  TimingLog(Format('FillTorrentsList total: %d ms', [TimingElapsed(Started)]));
 end;
 
 procedure TRpcThread.DoFillPeersList;
@@ -394,8 +398,10 @@ var
   ExtraFields: array of string;
   sl: TStringList;
   i: integer;
+  Started, SynchronizeStarted: QWord;
 begin
   Result:=False;
+  Started:=TimingStart;
   sl:=TStringList.Create;
   try
     FRpc.Lock;
@@ -439,7 +445,11 @@ begin
     if (args <> nil) and not Terminated then begin
       FRpc.RequestFullInfo:=False;
       ResultData:=args.Arrays['torrents'];
+      SynchronizeStarted:=TimingStart;
       Synchronize(@DoFillTorrentsList);
+      TimingLog(Format('Synchronize DoFillTorrentsList wait: %d ms', [TimingElapsed(SynchronizeStarted)]));
+      TimingLog(Format('RPC torrent-get: %d ms; Torrent count: %d',
+        [TimingElapsed(Started), ResultData.Count]));
       Result:=True;
     end;
   finally
@@ -709,6 +719,7 @@ var
   s: string;
   i, j, OldTimeOut, RetryCnt: integer;
   locked, r: boolean;
+  LockStarted, ParseStarted: QWord;
 begin
   if FRpcPath = '' then
     FRpcPath:=DefaultRpcPath;
@@ -718,7 +729,9 @@ begin
   i:=0;
   repeat
     Inc(i);
+    LockStarted:=TimingStart;
     HttpLock.Enter;
+    TimingLog(Format('RPC HttpLock wait: %d ms', [TimingElapsed(LockStarted)]));
     locked:=True;
     try
       OldTimeOut:=Http.Timeout;
@@ -829,7 +842,9 @@ begin
         RequestStartTime:=0;
         try
           try
+            ParseStarted:=TimingStart;
             obj:=jp.Parse;
+            TimingLog(Format('RPC JSON parse: %d ms', [TimingElapsed(ParseStarted)]));
             Http.Document.Clear;
           finally
             jp.Free;

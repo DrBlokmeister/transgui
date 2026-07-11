@@ -43,7 +43,7 @@ uses
   Graphics, Dialogs, ComCtrls, Menus, ActnList, LCLVersion,
   httpsend, StdCtrls, fpjson, jsonparser, ExtCtrls, rpc, syncobjs, variants, varlist, IpResolver,
   zipper, ResTranslator, VarGrid, StrUtils, LCLProc, Grids, BaseForm, utils, AddTorrent, Types,
-  LazFileUtils, LazUTF8, StringToVK, passwcon, GContnrs,lineinfo, RegExpr;
+  LazFileUtils, LazUTF8, StringToVK, passwcon, GContnrs,lineinfo, RegExpr, Performance;
 
 const
   AppName = 'Transmission Remote GUI';
@@ -2588,6 +2588,7 @@ var
   s, ss, OldDownloadDir, IniSec, OldName: string;
   ok: boolean;
   pFD:FolderData;
+  DialogStarted: QWord;
 begin
   Result:=False;
   if not RpcObj.Connected and not RpcObj.Connecting then
@@ -2600,6 +2601,7 @@ begin
     AppBusy;
     try
       IsAppHidden:=not Self.Visible or (Self.WindowState = wsMinimized);
+      DialogStarted:=TimingStart;
       with TAddTorrentForm.Create(Self) do
       try
         if IsAppHidden then begin
@@ -2746,6 +2748,7 @@ begin
           btSelectAllClick(nil)
         else begin
           HideWaitMsg;
+          TimingLog(Format('Add torrent dialog opening: %d ms', [TimingElapsed(DialogStarted)]));
           ok:=ShowModal = mrOk;
           if BorderStyle = bsSizeable then begin
             Ini.WriteInteger('AddTorrent', 'Width', Width);
@@ -5751,7 +5754,11 @@ var
   Paths, Labels: TStringList;
   v: variant;
   FieldExists: array of boolean;
+  GridStarted, SortStarted, GroupingStarted: QWord;
+  RowsAdded, RowsRemoved: integer;
 begin
+  RowsAdded:=0;
+  RowsRemoved:=0;
   if gTorrents.Tag <> 0 then exit;
   if list = nil then begin
     ClearDetailsInfo;
@@ -5845,8 +5852,10 @@ begin
     t:=list[i] as TJSONObject;
     id:=t.Integers['id'];
     ExistingRow:=FTorrents.Find(idxTorrentId, id, row);
-    if not ExistingRow then
+    if not ExistingRow then begin
       FTorrents.InsertRow(row);
+      Inc(RowsAdded);
+    end;
 
     FTorrents[idxTorrentId, row]:=t.Integers['id'];
 
@@ -6073,10 +6082,14 @@ begin
   i:=0;
   while i < FTorrents.Count do
     if FTorrents[idxTag, i] = 0 then
-      FTorrents.Delete(i)
+      begin
+        FTorrents.Delete(i);
+        Inc(RowsRemoved);
+      end
     else
       Inc(i);
 
+  GridStarted:=TimingStart;
   gTorrents.Items.BeginUpdate;
   try
     for i:=0 to gTorrents.Items.Count - 1 do
@@ -6172,7 +6185,9 @@ begin
       else
         Inc(i);
 
+    SortStarted:=TimingStart;
     gTorrents.Sort;
+    TimingLog(Format('Torrent grid sort: %d ms', [TimingElapsed(SortStarted)]));
     if gTorrents.Items.Count > 0 then begin
       if OldId <> 0 then begin
         i:=gTorrents.Items.IndexOf(idxTorrentId, OldId);
@@ -6191,6 +6206,7 @@ begin
   end;
   gTorrentsClick(nil);
 
+  GroupingStarted:=TimingStart;
   crow:=-1;
   lvFilter.Items.BeginUpdate;
   try
@@ -6269,6 +6285,10 @@ begin
   finally
     lvFilter.Items.EndUpdate;
   end;
+  TimingLog(Format('Torrent grouping/filtering: %d ms', [TimingElapsed(GroupingStarted)]));
+  TimingLog(Format('Torrent grid update: %d ms', [TimingElapsed(GridStarted)]));
+  TimingLog(Format('Torrent count: %d; Rows added: %d; Rows removed: %d',
+    [list.Count, RowsAdded, RowsRemoved]));
   if crow >= 0 then
     lvFilter.Row:=crow
   else
